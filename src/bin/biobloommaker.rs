@@ -9,7 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-const AUTO_MAX_HASHES: u8 = 8;
+const AUTO_MAX_HASHES: u8 = 4;
 
 #[derive(Parser, Debug)]
 #[command(
