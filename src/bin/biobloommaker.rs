@@ -1,9 +1,11 @@
 use anyhow::{Context, Result, bail};
 use biobloom_rs::bloom::{
-    ConcurrentBloomFilter, DEFAULT_BLOCK_WORDS, bit_len_for_fpr_with_hash_count, optimal_bit_len,
-    optimal_hash_count,
+    BloomFilter, ConcurrentBloomFilter, DEFAULT_BLOCK_WORDS, bit_len_for_fpr_with_hash_count,
+    optimal_bit_len, optimal_hash_count,
 };
-use biobloom_rs::fastx::{count_kmers_in_file, insert_file_into_filter};
+use biobloom_rs::fastx::{
+    ProgressiveStats, count_kmers_in_file, insert_file_into_filter, progressive_insert_file,
+};
 use clap::{ArgAction, Parser};
 use rayon::prelude::*;
 use std::fs;
@@ -45,6 +47,18 @@ struct Cli {
     #[arg(long = "block_words", default_value_t = DEFAULT_BLOCK_WORDS)]
     block_words: u16,
 
+    #[arg(short = 'r', long = "progressive")]
+    progressive: Option<f64>,
+
+    #[arg(short = 's', long = "subtract")]
+    subtract: Option<PathBuf>,
+
+    #[arg(short = 'e', long = "iterations", default_value_t = 1)]
+    iterations: usize,
+
+    #[arg(long = "seed_files", default_value_t = 1)]
+    seed_files: usize,
+
     #[arg(short = 't', long = "threads")]
     threads: Option<usize>,
 
@@ -71,6 +85,20 @@ fn main() -> Result<()> {
     }
     if cli.blocked && (cli.block_words == 0 || !cli.block_words.is_power_of_two()) {
         bail!("--block_words must be a non-zero power-of-two with --blocked");
+    }
+    if let Some(threshold) = cli.progressive {
+        if !(0.0..=1.0).contains(&threshold) {
+            bail!("--progressive threshold must be in [0, 1]");
+        }
+        if cli.seed_files == 0 || cli.seed_files >= cli.files.len() {
+            bail!("--seed_files must be in [1, num_files-1] when --progressive is enabled");
+        }
+        if cli.iterations == 0 {
+            bail!("--iterations must be > 0");
+        }
+    }
+    if cli.iterations == 0 {
+        bail!("--iterations must be > 0");
     }
 
     if let Some(t) = cli.threads {
@@ -149,11 +177,71 @@ fn main() -> Result<()> {
     )?;
 
     let insert_start = Instant::now();
-    let inserted: u64 = cli
-        .files
-        .par_iter()
-        .map(|p| insert_file_into_filter(p, &filter))
-        .try_reduce(|| 0_u64, |a, b| Ok(a + b))?;
+    let mut inserted = 0_u64;
+    let mut progressive_total_reads = 0_u64;
+    let mut progressive_matched_reads = 0_u64;
+    let mut progressive_queried_kmers = 0_u64;
+    let mut progressive_passes = 0_u64;
+    let mut subtract_loaded: Option<BloomFilter> = None;
+
+    if let Some(progressive_threshold) = cli.progressive {
+        let seed_files = &cli.files[..cli.seed_files];
+        inserted += seed_files
+            .par_iter()
+            .map(|p| insert_file_into_filter(p, &filter))
+            .try_reduce(|| 0_u64, |a, b| Ok(a + b))?;
+
+        if let Some(path) = cli.subtract.as_ref() {
+            subtract_loaded = Some(
+                BloomFilter::load(path)
+                    .with_context(|| format!("failed to load {}", path.display()))?,
+            );
+            if cli.verbose {
+                eprintln!("loaded subtract filter: {}", path.display());
+            }
+        }
+
+        let recruit_files = &cli.files[cli.seed_files..];
+        for pass in 0..cli.iterations {
+            let mut pass_stats = ProgressiveStats::default();
+            for file in recruit_files {
+                let stats = progressive_insert_file(
+                    file,
+                    &filter,
+                    progressive_threshold,
+                    subtract_loaded.as_ref(),
+                )?;
+                pass_stats.total_reads += stats.total_reads;
+                pass_stats.matched_reads += stats.matched_reads;
+                pass_stats.queried_kmers += stats.queried_kmers;
+                pass_stats.inserted_kmers += stats.inserted_kmers;
+            }
+            progressive_passes += 1;
+            progressive_total_reads += pass_stats.total_reads;
+            progressive_matched_reads += pass_stats.matched_reads;
+            progressive_queried_kmers += pass_stats.queried_kmers;
+            inserted += pass_stats.inserted_kmers;
+            if cli.verbose {
+                eprintln!(
+                    "progressive pass {}: total_reads={} matched_reads={} inserted_kmers={} queried_kmers={}",
+                    pass + 1,
+                    pass_stats.total_reads,
+                    pass_stats.matched_reads,
+                    pass_stats.inserted_kmers,
+                    pass_stats.queried_kmers
+                );
+            }
+            if pass_stats.matched_reads == 0 || pass_stats.inserted_kmers == 0 {
+                break;
+            }
+        }
+    } else {
+        inserted += cli
+            .files
+            .par_iter()
+            .map(|p| insert_file_into_filter(p, &filter))
+            .try_reduce(|| 0_u64, |a, b| Ok(a + b))?;
+    }
     let insert_elapsed = insert_start.elapsed();
 
     let finalized = filter.finalize();
@@ -177,6 +265,26 @@ fn main() -> Result<()> {
         "expected_elements\t{}\n",
         finalized.expected_elements
     ));
+    if let Some(threshold) = cli.progressive {
+        info.push_str(&format!("progressive_threshold\t{:.6}\n", threshold));
+        info.push_str(&format!("progressive_seed_files\t{}\n", cli.seed_files));
+        info.push_str(&format!("progressive_passes\t{}\n", progressive_passes));
+        info.push_str(&format!(
+            "progressive_total_reads\t{}\n",
+            progressive_total_reads
+        ));
+        info.push_str(&format!(
+            "progressive_matched_reads\t{}\n",
+            progressive_matched_reads
+        ));
+        info.push_str(&format!(
+            "progressive_queried_kmers\t{}\n",
+            progressive_queried_kmers
+        ));
+        if let Some(path) = cli.subtract.as_ref() {
+            info.push_str(&format!("progressive_subtract\t{}\n", path.display()));
+        }
+    }
     info.push_str(&format!("inserted_kmers\t{}\n", inserted));
     info.push_str("inputs\t");
     for (i, p) in cli.files.iter().enumerate() {
@@ -195,6 +303,14 @@ fn main() -> Result<()> {
         "k={} hashes={} bits={} inserted_kmers={}",
         finalized.kmer_size, finalized.hash_count, finalized.bit_len, inserted
     );
+    if let Some(threshold) = cli.progressive {
+        println!("progressive_threshold\t{:.6}", threshold);
+        println!("progressive_seed_files\t{}", cli.seed_files);
+        println!("progressive_passes\t{}", progressive_passes);
+        println!("progressive_total_reads\t{}", progressive_total_reads);
+        println!("progressive_matched_reads\t{}", progressive_matched_reads);
+        println!("progressive_queried_kmers\t{}", progressive_queried_kmers);
+    }
     println!("insert_kmer_ops\t{}", inserted);
     if inserted > 0 {
         println!(

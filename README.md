@@ -56,6 +56,12 @@ Recruit reads against one filter:
 - `-g/--hash_num`
 - `-k/--kmer_size`
 - `-n/--num_ele`
+- `--bit_len`
+- `--blocked` + `--block_words`
+- `-r/--progressive`
+- `-s/--subtract`
+- `-e/--iterations`
+- `--seed_files`
 - `-t/--threads`
 
 `biobloomcategorizer` supports:

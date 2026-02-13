@@ -179,6 +179,51 @@ impl ConcurrentBloomFilter {
         }
     }
 
+    #[inline]
+    pub fn contains_kmer(&self, canonical_kmer: u64) -> bool {
+        let (h1, h2) = hash_pair(canonical_kmer);
+        if self.layout == BloomLayout::Blocked {
+            let block_idx = if self.block_count_mask != 0 {
+                (h1 & self.block_count_mask) as usize
+            } else {
+                (h1 % self.block_count) as usize
+            };
+            let base = block_idx * self.block_words as usize;
+            let mut h = h1 ^ h2.rotate_left(17);
+            for _ in 0..self.hash_count {
+                let in_block = if self.block_bits_mask != 0 {
+                    (h & self.block_bits_mask) as usize
+                } else {
+                    (h % self.block_bits) as usize
+                };
+                let word_idx = base + (in_block >> 6);
+                let bit = in_block & 63;
+                let mask = 1_u64 << bit;
+                if self.words[word_idx].load(Ordering::Relaxed) & mask == 0 {
+                    return false;
+                }
+                h = h.wrapping_add(h2);
+            }
+        } else {
+            let mut h = h1;
+            for _ in 0..self.hash_count {
+                let idx = if self.bit_mask != 0 {
+                    (h & self.bit_mask) as usize
+                } else {
+                    (h % self.bit_len) as usize
+                };
+                let word_idx = idx >> 6;
+                let bit = idx & 63;
+                let mask = 1_u64 << bit;
+                if self.words[word_idx].load(Ordering::Relaxed) & mask == 0 {
+                    return false;
+                }
+                h = h.wrapping_add(h2);
+            }
+        }
+        true
+    }
+
     pub fn finalize(self) -> BloomFilter {
         let words = self
             .words

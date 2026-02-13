@@ -1,4 +1,4 @@
-use crate::bloom::{ConcurrentBloomFilter, for_each_canonical_kmer};
+use crate::bloom::{BloomFilter, ConcurrentBloomFilter, for_each_canonical_kmer};
 use anyhow::{Context, Result, bail};
 use needletail::parse_fastx_file;
 use rayon::prelude::*;
@@ -9,6 +9,14 @@ pub struct ReadRecord {
     pub id: Vec<u8>,
     pub seq: Vec<u8>,
     pub qual: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProgressiveStats {
+    pub total_reads: u64,
+    pub matched_reads: u64,
+    pub queried_kmers: u64,
+    pub inserted_kmers: u64,
 }
 
 pub fn count_kmers_in_file(path: &Path, kmer_size: usize) -> Result<u64> {
@@ -37,6 +45,54 @@ pub fn insert_file_into_filter(path: &Path, filter: &ConcurrentBloomFilter) -> R
     }
 
     Ok(inserted_kmers)
+}
+
+pub fn progressive_insert_file(
+    path: &Path,
+    filter: &ConcurrentBloomFilter,
+    threshold: f64,
+    subtract: Option<&BloomFilter>,
+) -> Result<ProgressiveStats> {
+    let mut reader = parse_fastx_file(path)
+        .with_context(|| format!("failed to open input file {}", path.display()))?;
+    let k = filter.kmer_size as usize;
+    let mut stats = ProgressiveStats::default();
+
+    while let Some(record) = reader.next() {
+        let record = record.with_context(|| format!("failed to parse {}", path.display()))?;
+        let seq = record.seq().as_ref().to_vec();
+        stats.total_reads += 1;
+
+        let mut total = 0_u64;
+        let mut hits = 0_u64;
+        for_each_canonical_kmer(&seq, k, |canonical| {
+            total += 1;
+            if filter.contains_kmer(canonical) {
+                hits += 1;
+            }
+        });
+        stats.queried_kmers += total;
+
+        if total == 0 {
+            continue;
+        }
+
+        let score = hits as f64 / total as f64;
+        if score < threshold {
+            continue;
+        }
+
+        stats.matched_reads += 1;
+        for_each_canonical_kmer(&seq, k, |canonical| {
+            if subtract.is_some_and(|sub| sub.contains_kmer(canonical)) {
+                return;
+            }
+            filter.insert_kmer(canonical);
+            stats.inserted_kmers += 1;
+        });
+    }
+
+    Ok(stats)
 }
 
 #[inline]
