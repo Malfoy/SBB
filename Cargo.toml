@@ -1,0 +1,37 @@
+[package]
+name = "biobloom-rs"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "biobloom_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "biobloommaker"
+path = "src/bin/biobloommaker.rs"
+
+[[bin]]
+name = "biobloomcategorizer"
+path = "src/bin/biobloomcategorizer.rs"
+
+[[bin]]
+name = "biobloomrecruit"
+path = "src/bin/biobloomrecruit.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+flate2 = "1.0"
+needletail = "0.6"
+rayon = "1.10"
+
+[dev-dependencies]
+tempfile = "3.14"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
