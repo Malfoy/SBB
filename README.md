@@ -97,3 +97,47 @@ This project currently uses an internal Rust Bloom filter format (`.bf`) and is 
 ```bash
 cargo test
 ```
+
+Expanded coverage now includes:
+- Bloom layout behavior and false-negative checks
+- k-mer iterator edge cases (`N` reset, `k=1`, `k=32`, short reads)
+- Bloom sizing/hash math sanity checks
+- `biobloommaker` CLI validation failures
+- Progressive mode behavior (with and without subtract filter)
+- Format roundtrip checks for classic and blocked layouts
+
+## Benchmarks (Rust Only)
+
+Dataset generation is done by the multithreaded Rust binary `sbbbenchgen` (release build), not Python.
+
+Bloom-size sweep (classic and blocked for each point):
+
+```bash
+bash bench/benchmark_bloom_size.sh
+```
+
+Hash-count sweep (classic and blocked for each point):
+
+```bash
+bash bench/benchmark_hash_count.sh
+```
+
+Useful environment overrides for both scripts:
+- `BENCH_ROOT` (default: `/tmp/sbb-bench-rust`)
+- `THREADS` (default: `nproc`)
+- `REF_LEN` (default: `100000000`)
+- `READ_LEN` (default: `20000`)
+- `READ_COUNT` (default: `150000`)
+- `SEED` (default: `1337`)
+- `KMER_SIZE` (default: `25`)
+- `FPR` (default: `0.000001`)
+- `CAT_SCORE` (default: `1.0`)
+- `BLOCK_WORDS` (default: `1`)
+
+Bloom-size script specific:
+- `BITS_PER_ELEMENT_LIST` (default: `8,12,16,24,32`)
+- `HASH_NUM` (default: `4`)
+
+Hash-count script specific:
+- `BITS_PER_ELEMENT` (default: `16`)
+- `HASH_LIST` (default: `1,2,3,4,6,8`)
