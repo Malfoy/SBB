@@ -1,6 +1,7 @@
 use crate::bloom::{ConcurrentBloomFilter, for_each_canonical_kmer};
 use anyhow::{Context, Result, bail};
 use needletail::parse_fastx_file;
+use rayon::prelude::*;
 use std::path::Path;
 
 #[derive(Clone, Debug)]
@@ -32,12 +33,78 @@ pub fn insert_file_into_filter(path: &Path, filter: &ConcurrentBloomFilter) -> R
 
     while let Some(record) = reader.next() {
         let record = record.with_context(|| format!("failed to parse {}", path.display()))?;
-        inserted_kmers += for_each_canonical_kmer(record.seq().as_ref(), k, |canonical| {
-            filter.insert_kmer(canonical)
-        }) as u64;
+        inserted_kmers += insert_seq_into_filter(record.seq().as_ref(), filter, k);
     }
 
     Ok(inserted_kmers)
+}
+
+#[inline]
+fn nuc2bits(b: u8) -> Option<u8> {
+    match b {
+        b'A' | b'a' => Some(0),
+        b'C' | b'c' => Some(1),
+        b'G' | b'g' => Some(2),
+        b'T' | b't' | b'U' | b'u' => Some(3),
+        _ => None,
+    }
+}
+
+fn insert_seq_into_filter(seq: &[u8], filter: &ConcurrentBloomFilter, k: usize) -> u64 {
+    const PAR_MIN_STARTS: usize = 1_000_000;
+    const CHUNK_STARTS: usize = 1_000_000;
+
+    if seq.len() < k {
+        return 0;
+    }
+    let starts = seq.len() - k + 1;
+    if starts < PAR_MIN_STARTS || rayon::current_num_threads() <= 1 {
+        return for_each_canonical_kmer(seq, k, |canonical| filter.insert_kmer(canonical)) as u64;
+    }
+
+    let chunks = starts.div_ceil(CHUNK_STARTS);
+    (0..chunks)
+        .into_par_iter()
+        .map(|chunk_idx| {
+            let start_pos = chunk_idx * CHUNK_STARTS;
+            let end_pos = (start_pos + CHUNK_STARTS).min(starts);
+            let slice_end = end_pos + k - 1;
+            let slice = &seq[start_pos..slice_end];
+
+            let mut forward = 0_u64;
+            let mut reverse = 0_u64;
+            let mask = if k == 32 {
+                u64::MAX
+            } else {
+                (1_u64 << (2 * k)) - 1
+            };
+            let rev_shift = 2 * (k - 1);
+            let mut run = 0_usize;
+            let mut count = 0_u64;
+
+            for &b in slice {
+                match nuc2bits(b) {
+                    Some(code) => {
+                        forward = ((forward << 2) | code as u64) & mask;
+                        let comp = (3_u8 - code) as u64;
+                        reverse = (reverse >> 2) | (comp << rev_shift);
+
+                        run += 1;
+                        if run >= k {
+                            count += 1;
+                            filter.insert_kmer(forward.min(reverse));
+                        }
+                    }
+                    None => {
+                        run = 0;
+                        forward = 0;
+                        reverse = 0;
+                    }
+                }
+            }
+            count
+        })
+        .sum()
 }
 
 pub fn for_each_batch<F>(path: &Path, batch_size: usize, mut f: F) -> Result<()>

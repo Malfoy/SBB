@@ -270,6 +270,17 @@ fn nuc2bits(b: u8) -> Option<u8> {
 }
 
 pub fn for_each_canonical_kmer(seq: &[u8], k: usize, mut f: impl FnMut(u64)) -> usize {
+    for_each_canonical_kmer_until(seq, k, |canonical| {
+        f(canonical);
+        true
+    })
+}
+
+pub fn for_each_canonical_kmer_until(
+    seq: &[u8],
+    k: usize,
+    mut f: impl FnMut(u64) -> bool,
+) -> usize {
     if !(1..=32).contains(&k) {
         return 0;
     }
@@ -296,7 +307,9 @@ pub fn for_each_canonical_kmer(seq: &[u8], k: usize, mut f: impl FnMut(u64)) -> 
                 if run >= k {
                     count += 1;
                     let canonical = forward.min(reverse);
-                    f(canonical);
+                    if !f(canonical) {
+                        return count;
+                    }
                 }
             }
             None => {

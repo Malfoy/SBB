@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use biobloom_rs::classify::{
     ClassifyConfig, FilterDb, apply_inclusive_pair, classify_seq_with_metrics,
-    score_seq_against_filter_with_counts,
+    match_seq_against_filter_with_counts,
 };
 use biobloom_rs::fastx::{ReadRecord, for_each_batch, for_each_paired_batch, for_each_seq_batch};
 use biobloom_rs::writer::{CategorizerWriters, OutputFormat, format_score_suffix};
@@ -257,12 +257,8 @@ fn process_single_stats_only_single_filter(
         let results: Vec<_> = batch
             .par_iter()
             .map(|seq| {
-                let (score, queried_kmers) = score_seq_against_filter_with_counts(seq, bloom);
-                let matched = if cfg.best_hit {
-                    score > 0.0
-                } else {
-                    score >= cfg.threshold
-                };
+                let (matched, queried_kmers) =
+                    match_seq_against_filter_with_counts(seq, bloom, cfg);
                 (u64::from(matched), queried_kmers)
             })
             .collect();
