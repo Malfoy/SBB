@@ -1,11 +1,11 @@
-# biobloom-rs
+# SBB
 
 A Rust reimplementation of the core `biobloom` workflow with a focus on throughput and low overhead.
 
-Implemented binaries:
-- `biobloommaker`
-- `biobloomcategorizer`
-- `biobloomrecruit`
+Implemented CLI:
+- `sbb maker`
+- `sbb categorizer`
+- `sbb recruit`
 
 ## Build
 
@@ -18,13 +18,13 @@ cargo build --release
 Create a filter:
 
 ```bash
-./target/release/biobloommaker -p ecoli -o filters -k 25 -f 0.0075 ref1.fa ref2.fa.gz
+./target/release/sbb maker -p ecoli -o filters -k 25 -f 0.0075 ref1.fa ref2.fa.gz
 ```
 
 Categorize reads:
 
 ```bash
-./target/release/biobloomcategorizer \
+./target/release/sbb categorizer \
   -f "filters/ecoli.bf filters/other.bf" \
   --fq -p run1 \
   reads_1.fq.gz reads_2.fq.gz
@@ -33,7 +33,7 @@ Categorize reads:
 Recruit reads against one filter:
 
 ```bash
-./target/release/biobloomrecruit \
+./target/release/sbb recruit \
   -f filters/ecoli.bf \
   --fq -p recruited \
   reads.fq.gz
@@ -49,7 +49,7 @@ Recruit reads against one filter:
 
 ## CLI Notes
 
-`biobloommaker` supports:
+`sbb maker` supports:
 - `-p/--file_prefix`
 - `-o/--output_dir`
 - `-f/--fal_pos_rate`
@@ -65,7 +65,7 @@ Recruit reads against one filter:
 - `--seed_files`
 - `-t/--threads`
 
-`biobloomcategorizer` supports:
+`sbb categorizer` supports:
 - `-p/--prefix`
 - `-f/--filter_files`
 - `-e/--paired_mode` (exactly two files)
@@ -77,11 +77,11 @@ Recruit reads against one filter:
 - `-g/--gz_output`
 - `--fa` or `--fq`
 
-`biobloomrecruit` supports single-filter recruiting with analogous output and scoring options.
+`sbb recruit` supports single-filter recruiting with analogous output and scoring options.
 
 ## Output Behavior
 
-`biobloomcategorizer` can emit:
+`sbb categorizer` can emit:
 - per-filter files: `<prefix>_<filter_id>.fa|fq[.gz]`
 - `<prefix>_nomatch.fa|fq[.gz]`
 - `<prefix>_multimatch.fa|fq[.gz]`
@@ -102,7 +102,7 @@ Expanded coverage now includes:
 - Bloom layout behavior and false-negative checks
 - k-mer iterator edge cases (`N` reset, `k=1`, `k=32`, short reads)
 - Bloom sizing/hash math sanity checks
-- `biobloommaker` CLI validation failures
+- `sbb maker` CLI validation failures
 - Progressive mode behavior (with and without subtract filter)
 - Format roundtrip checks for classic and blocked layouts
 

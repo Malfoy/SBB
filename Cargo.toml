@@ -2,22 +2,15 @@
 name = "biobloom-rs"
 version = "0.1.0"
 edition = "2024"
+autobins = false
 
 [lib]
 name = "biobloom_rs"
 path = "src/lib.rs"
 
 [[bin]]
-name = "biobloommaker"
-path = "src/bin/biobloommaker.rs"
-
-[[bin]]
-name = "biobloomcategorizer"
-path = "src/bin/biobloomcategorizer.rs"
-
-[[bin]]
-name = "biobloomrecruit"
-path = "src/bin/biobloomrecruit.rs"
+name = "sbb"
+path = "src/bin/sbb.rs"
 
 [[bin]]
 name = "sbbbenchgen"

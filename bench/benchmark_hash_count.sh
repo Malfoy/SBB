@@ -20,8 +20,7 @@ BITS_PER_ELEMENT="${BITS_PER_ELEMENT:-16}"
 HASH_LIST="${HASH_LIST:-1,2,3,4,6,8}"
 
 BENCHGEN="$ROOT_DIR/target/release/sbbbenchgen"
-RS_MAKER="$ROOT_DIR/target/release/biobloommaker"
-RS_CAT="$ROOT_DIR/target/release/biobloomcategorizer"
+SBB_BIN="$ROOT_DIR/target/release/sbb"
 
 mkdir -p "$DATA_DIR" "$RESULT_DIR" "$RUN_DIR"
 
@@ -35,7 +34,7 @@ next_pow2() {
 }
 
 echo "[bench] building release binaries"
-cargo build --release --bin sbbbenchgen --bin biobloommaker --bin biobloomcategorizer >/tmp/sbb_bench_build.log
+cargo build --release --bin sbbbenchgen --bin sbb >/tmp/sbb_bench_build.log
 
 META_PATH="$DATA_DIR/dataset.meta"
 EXPECTED_META=$'ref_len='"$REF_LEN"$'\nread_len='"$READ_LEN"$'\nread_count='"$READ_COUNT"$'\nseed='"$SEED"$'\nreads_format=fasta\n'
@@ -92,7 +91,7 @@ run_case() {
   fi
 
   /usr/bin/time -f "%e\t%M" -o "$maker_time" \
-    "$RS_MAKER" \
+    "$SBB_BIN" maker \
       -p "ref_${run_tag}" \
       -o "$out_dir" \
       -k "$KMER_SIZE" \
@@ -106,7 +105,7 @@ run_case() {
       >"$maker_log" 2>"$out_dir/maker.err"
 
   /usr/bin/time -f "%e\t%M" -o "$cat_time" \
-    "$RS_CAT" \
+    "$SBB_BIN" categorizer \
       -f "$out_dir/ref_${run_tag}.bf" \
       -t "$THREADS" \
       -s "$CAT_SCORE" \

@@ -9,8 +9,9 @@ fn rejects_conflicting_layout_flags() {
     let input = d.path().join("in.fa");
     common::write_fasta(&input, &[("r1", "ACGTACGTACGT")]).expect("input fasta should be writable");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_biobloommaker"))
+    let out = Command::new(env!("CARGO_BIN_EXE_sbb"))
         .args([
+            "maker",
             "-p",
             "t",
             "-o",
@@ -33,8 +34,9 @@ fn rejects_non_power_of_two_block_words_in_blocked_mode() {
     let input = d.path().join("in.fa");
     common::write_fasta(&input, &[("r1", "ACGTACGTACGT")]).expect("input fasta should be writable");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_biobloommaker"))
+    let out = Command::new(env!("CARGO_BIN_EXE_sbb"))
         .args([
+            "maker",
             "-p",
             "t",
             "-o",
@@ -59,8 +61,9 @@ fn rejects_invalid_progressive_threshold() {
     common::write_fasta(&a, &[("r1", "ACGTACGTACGT")]).expect("seed fasta should be writable");
     common::write_fasta(&b, &[("r2", "ACGTACGTACGT")]).expect("recruit fasta should be writable");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_biobloommaker"))
+    let out = Command::new(env!("CARGO_BIN_EXE_sbb"))
         .args([
+            "maker",
             "-p",
             "t",
             "-o",

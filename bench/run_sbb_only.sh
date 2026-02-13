@@ -15,8 +15,8 @@ CAT_SCORE="${CAT_SCORE:-1.0}"
 RS_BLOOM_IMPL="${RS_BLOOM_IMPL:-blocked}"
 RS_BLOCK_WORDS="${RS_BLOCK_WORDS:-8}"
 
-RS_MAKER="${RS_MAKER:-/home/nadine/Code/SBB/target/release/biobloommaker}"
-RS_CAT="${RS_CAT:-/home/nadine/Code/SBB/target/release/biobloomcategorizer}"
+SBB_BIN="${SBB_BIN:-/home/nadine/Code/SBB/target/release/sbb}"
+BENCHGEN="${BENCHGEN:-/home/nadine/Code/SBB/target/release/sbbbenchgen}"
 
 mkdir -p "$DATA_DIR" "$RS_DIR"
 
@@ -28,16 +28,17 @@ if [[ -f "$DATA_META" ]]; then
 fi
 
 if [[ ! -s "$DATA_DIR/ref.fa" || ! -s "$DATA_DIR/reads.fa" || "$CURRENT_META"$'\n' != "$EXPECTED_META" ]]; then
-  /home/nadine/Code/SBB/bench/gen_dataset.py \
-    --out-dir "$DATA_DIR" \
-    --ref-len "$REF_LEN" \
-    --read-len "$READ_LEN" \
-    --read-count "$READ_COUNT" \
-    --seed "$SEED"
+  "$BENCHGEN" \
+    --out_dir "$DATA_DIR" \
+    --ref_len "$REF_LEN" \
+    --read_len "$READ_LEN" \
+    --read_count "$READ_COUNT" \
+    --seed "$SEED" \
+    --threads "$THREADS"
 fi
 
 READS_INPUT="$DATA_DIR/reads.fa"
-if "$RS_CAT" --help 2>&1 | rg -qi 'gz'; then
+if "$SBB_BIN" categorizer --help 2>&1 | rg -qi 'gz'; then
   if [[ ! -s "$DATA_DIR/reads.fa.gz" || "$DATA_DIR/reads.fa" -nt "$DATA_DIR/reads.fa.gz" ]]; then
     gzip -1 -c "$DATA_DIR/reads.fa" > "$DATA_DIR/reads.fa.gz"
   fi
@@ -58,11 +59,11 @@ else
 fi
 
 /usr/bin/time -f "sbb\tmaker\t%e\t%M" -o "$SUMMARY" -a \
-  "$RS_MAKER" -p rs_ref -o "$RS_DIR" -k 25 -f "$MAKER_FPR" -t "$THREADS" "${RS_MAKER_EXTRA[@]}" "$DATA_DIR/ref.fa" \
+  "$SBB_BIN" maker -p rs_ref -o "$RS_DIR" -k 25 -f "$MAKER_FPR" -t "$THREADS" "${RS_MAKER_EXTRA[@]}" "$DATA_DIR/ref.fa" \
   >/tmp/sbb_maker_${TAG}.log 2>/tmp/sbb_maker_${TAG}.err
 
 /usr/bin/time -f "sbb\tcategorizer\t%e\t%M" -o "$SUMMARY" -a \
-  "$RS_CAT" -f "$RS_DIR/rs_ref.bf" -t "$THREADS" -s "$CAT_SCORE" "$READS_INPUT" \
+  "$SBB_BIN" categorizer -f "$RS_DIR/rs_ref.bf" -t "$THREADS" -s "$CAT_SCORE" "$READS_INPUT" \
   >/tmp/sbb_cat_${TAG}.log 2>/tmp/sbb_cat_${TAG}.err
 
 echo "threads\t$THREADS"
