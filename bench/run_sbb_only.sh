@@ -12,7 +12,7 @@ READ_COUNT="${READ_COUNT:-300000}"
 SEED="${SEED:-1337}"
 MAKER_FPR="${MAKER_FPR:-0.00001}"
 CAT_SCORE="${CAT_SCORE:-1.0}"
-RS_BLOOM_IMPL="${RS_BLOOM_IMPL:-classic}"
+RS_BLOOM_IMPL="${RS_BLOOM_IMPL:-blocked}"
 RS_BLOCK_WORDS="${RS_BLOCK_WORDS:-8}"
 
 RS_MAKER="${RS_MAKER:-/home/nadine/Code/SBB/target/release/biobloommaker}"
@@ -49,7 +49,12 @@ echo -e "tool\tstep\tseconds\tmax_rss_kb" > "$SUMMARY"
 
 RS_MAKER_EXTRA=()
 if [[ "$RS_BLOOM_IMPL" == "blocked" ]]; then
-  RS_MAKER_EXTRA+=(--blocked --block_words "$RS_BLOCK_WORDS")
+  RS_MAKER_EXTRA+=(--block_words "$RS_BLOCK_WORDS")
+elif [[ "$RS_BLOOM_IMPL" == "classic" ]]; then
+  RS_MAKER_EXTRA+=(--classic)
+else
+  echo "invalid RS_BLOOM_IMPL=$RS_BLOOM_IMPL (use blocked|classic)" >&2
+  exit 1
 fi
 
 /usr/bin/time -f "sbb\tmaker\t%e\t%M" -o "$SUMMARY" -a \

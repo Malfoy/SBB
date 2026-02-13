@@ -44,6 +44,9 @@ struct Cli {
     #[arg(long = "blocked", action = ArgAction::SetTrue)]
     blocked: bool,
 
+    #[arg(long = "classic", action = ArgAction::SetTrue)]
+    classic: bool,
+
     #[arg(long = "block_words", default_value_t = DEFAULT_BLOCK_WORDS)]
     block_words: u16,
 
@@ -83,8 +86,13 @@ fn main() -> Result<()> {
     {
         bail!("bit_len must be > 0 when provided");
     }
-    if cli.blocked && (cli.block_words == 0 || !cli.block_words.is_power_of_two()) {
-        bail!("--block_words must be a non-zero power-of-two with --blocked");
+    if cli.blocked && cli.classic {
+        bail!("choose only one layout override: --blocked or --classic");
+    }
+
+    let blocked_layout = !cli.classic;
+    if blocked_layout && (cli.block_words == 0 || !cli.block_words.is_power_of_two()) {
+        bail!("--block_words must be a non-zero power-of-two in blocked mode");
     }
     if let Some(threshold) = cli.progressive {
         if !(0.0..=1.0).contains(&threshold) {
@@ -147,7 +155,7 @@ fn main() -> Result<()> {
         .checked_next_power_of_two()
         .unwrap_or(bit_len)
         .max(64);
-    if cli.blocked {
+    if blocked_layout {
         let min_bits = u64::from(cli.block_words) * 64;
         if bit_len < min_bits {
             bit_len = min_bits;
@@ -161,8 +169,8 @@ fn main() -> Result<()> {
             hash_count,
             bit_len,
             expected_elements,
-            if cli.blocked { "blocked" } else { "classic" },
-            if cli.blocked { cli.block_words } else { 0 }
+            if blocked_layout { "blocked" } else { "classic" },
+            if blocked_layout { cli.block_words } else { 0 }
         );
     }
 
@@ -172,7 +180,7 @@ fn main() -> Result<()> {
         bit_len,
         expected_elements,
         cli.false_positive_rate,
-        cli.blocked,
+        blocked_layout,
         cli.block_words,
     )?;
 

@@ -57,7 +57,8 @@ Recruit reads against one filter:
 - `-k/--kmer_size`
 - `-n/--num_ele`
 - `--bit_len`
-- `--blocked` + `--block_words`
+- blocked layout is default (`--block_words` tunes block size)
+- `--classic` to force classic (non-blocked) layout
 - `-r/--progressive`
 - `-s/--subtract`
 - `-e/--iterations`
