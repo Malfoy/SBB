@@ -11,6 +11,7 @@ READ_LEN="${READ_LEN:-20000}"
 READ_COUNT="${READ_COUNT:-300000}"
 SEED="${SEED:-1337}"
 MAKER_FPR="${MAKER_FPR:-0.00001}"
+CAT_SCORE="${CAT_SCORE:-1.0}"
 
 CPP_MAKER="${CPP_MAKER:-/tmp/biobloom-upstream/BioBloomMaker/biobloommaker}"
 CPP_CAT="${CPP_CAT:-/tmp/biobloom-upstream/BioBloomCategorizer/biobloomcategorizer}"
@@ -53,7 +54,7 @@ echo -e "tool\tstep\tseconds\tmax_rss_kb" > "$SUMMARY"
   >/tmp/sbb_cpp_maker.log 2>/tmp/sbb_cpp_maker.err
 
 /usr/bin/time -f "cpp\tcategorizer\t%e\t%M" -o "$SUMMARY" -a \
-  "$CPP_CAT" -f "$CPP_DIR/cpp_ref.bf" -t "$THREADS" "$READS_INPUT" \
+  "$CPP_CAT" -f "$CPP_DIR/cpp_ref.bf" -t "$THREADS" -s "$CAT_SCORE" "$READS_INPUT" \
   >/tmp/sbb_cpp_cat.log 2>/tmp/sbb_cpp_cat.err
 
 /usr/bin/time -f "sbb\tmaker\t%e\t%M" -o "$SUMMARY" -a \
@@ -61,11 +62,12 @@ echo -e "tool\tstep\tseconds\tmax_rss_kb" > "$SUMMARY"
   >/tmp/sbb_rs_maker.log 2>/tmp/sbb_rs_maker.err
 
 /usr/bin/time -f "sbb\tcategorizer\t%e\t%M" -o "$SUMMARY" -a \
-  "$RS_CAT" -f "$RS_DIR/rs_ref.bf" -t "$THREADS" "$READS_INPUT" \
+  "$RS_CAT" -f "$RS_DIR/rs_ref.bf" -t "$THREADS" -s "$CAT_SCORE" "$READS_INPUT" \
   >/tmp/sbb_rs_cat.log 2>/tmp/sbb_rs_cat.err
 
 echo "threads\t$THREADS"
 echo "maker_fpr\t$MAKER_FPR"
+echo "cat_score\t$CAT_SCORE"
 echo "reads_input\t$READS_INPUT"
 wc -l "$DATA_DIR/ref.fa" "$DATA_DIR/reads.fa"
 if [[ "$READS_INPUT" == *.gz ]]; then
