@@ -35,6 +35,9 @@ struct Cli {
     #[arg(short = 'n', long = "num_ele", default_value_t = 0)]
     num_ele: u64,
 
+    #[arg(long = "bit_len")]
+    bit_len: Option<u64>,
+
     #[arg(short = 't', long = "threads")]
     threads: Option<usize>,
 
@@ -53,6 +56,11 @@ fn main() -> Result<()> {
     }
     if !(0.0..1.0).contains(&cli.false_positive_rate) {
         bail!("false positive rate must be in (0, 1)");
+    }
+    if let Some(bit_len) = cli.bit_len
+        && bit_len == 0
+    {
+        bail!("bit_len must be > 0 when provided");
     }
 
     if let Some(t) = cli.threads {
@@ -81,7 +89,7 @@ fn main() -> Result<()> {
     };
 
     let base_bit_len = optimal_bit_len(expected_elements, cli.false_positive_rate).max(64);
-    let (hash_count, bit_len) = if let Some(k) = cli.hash_num {
+    let (hash_count, mut bit_len) = if let Some(k) = cli.hash_num {
         (k, base_bit_len)
     } else {
         let chosen_hashes =
@@ -94,10 +102,14 @@ fn main() -> Result<()> {
         .max(64);
         (chosen_hashes, tuned_bit_len)
     };
-    let bit_len = bit_len
-        .checked_next_power_of_two()
-        .unwrap_or(bit_len)
-        .max(64);
+    if let Some(bit_len_override) = cli.bit_len {
+        bit_len = bit_len_override.max(64);
+    } else {
+        bit_len = bit_len
+            .checked_next_power_of_two()
+            .unwrap_or(bit_len)
+            .max(64);
+    }
 
     if cli.verbose {
         eprintln!(
