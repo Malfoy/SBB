@@ -12,6 +12,8 @@ READ_COUNT="${READ_COUNT:-300000}"
 SEED="${SEED:-1337}"
 MAKER_FPR="${MAKER_FPR:-0.00001}"
 CAT_SCORE="${CAT_SCORE:-1.0}"
+RS_BLOOM_IMPL="${RS_BLOOM_IMPL:-classic}"
+RS_BLOCK_WORDS="${RS_BLOCK_WORDS:-8}"
 
 RS_MAKER="${RS_MAKER:-/home/nadine/Code/SBB/target/release/biobloommaker}"
 RS_CAT="${RS_CAT:-/home/nadine/Code/SBB/target/release/biobloomcategorizer}"
@@ -45,8 +47,13 @@ fi
 SUMMARY="$BENCH_ROOT/sbb_${TAG}.tsv"
 echo -e "tool\tstep\tseconds\tmax_rss_kb" > "$SUMMARY"
 
+RS_MAKER_EXTRA=()
+if [[ "$RS_BLOOM_IMPL" == "blocked" ]]; then
+  RS_MAKER_EXTRA+=(--blocked --block_words "$RS_BLOCK_WORDS")
+fi
+
 /usr/bin/time -f "sbb\tmaker\t%e\t%M" -o "$SUMMARY" -a \
-  "$RS_MAKER" -p rs_ref -o "$RS_DIR" -k 25 -f "$MAKER_FPR" -t "$THREADS" "$DATA_DIR/ref.fa" \
+  "$RS_MAKER" -p rs_ref -o "$RS_DIR" -k 25 -f "$MAKER_FPR" -t "$THREADS" "${RS_MAKER_EXTRA[@]}" "$DATA_DIR/ref.fa" \
   >/tmp/sbb_maker_${TAG}.log 2>/tmp/sbb_maker_${TAG}.err
 
 /usr/bin/time -f "sbb\tcategorizer\t%e\t%M" -o "$SUMMARY" -a \
@@ -56,6 +63,10 @@ echo -e "tool\tstep\tseconds\tmax_rss_kb" > "$SUMMARY"
 echo "threads\t$THREADS"
 echo "maker_fpr\t$MAKER_FPR"
 echo "cat_score\t$CAT_SCORE"
+echo "rs_bloom_impl\t$RS_BLOOM_IMPL"
+if [[ "$RS_BLOOM_IMPL" == "blocked" ]]; then
+  echo "rs_block_words\t$RS_BLOCK_WORDS"
+fi
 echo "reads_input\t$READS_INPUT"
 wc -l "$DATA_DIR/ref.fa" "$DATA_DIR/reads.fa"
 if [[ "$READS_INPUT" == *.gz ]]; then

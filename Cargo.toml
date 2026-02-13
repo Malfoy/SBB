@@ -20,18 +20,18 @@ name = "biobloomrecruit"
 path = "src/bin/biobloomrecruit.rs"
 
 [dependencies]
-anyhow = "1.0"
-clap = { version = "4.5", features = ["derive"] }
-flate2 = "1.0"
-needletail = "0.6"
-rayon = "1.10"
+anyhow = "1.0.101"
+clap = { version = "4.5.58", features = ["derive"] }
+flate2 = "1.1.9"
+needletail = "0.6.3"
+rayon = "1.11.0"
 
 [dev-dependencies]
-tempfile = "3.14"
+tempfile = "3.25.0"
 
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"

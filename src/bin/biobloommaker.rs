@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use biobloom_rs::bloom::{
-    ConcurrentBloomFilter, bit_len_for_fpr_with_hash_count, optimal_bit_len, optimal_hash_count,
+    ConcurrentBloomFilter, DEFAULT_BLOCK_WORDS, bit_len_for_fpr_with_hash_count, optimal_bit_len,
+    optimal_hash_count,
 };
 use biobloom_rs::fastx::{count_kmers_in_file, insert_file_into_filter};
 use clap::{ArgAction, Parser};
@@ -38,6 +39,12 @@ struct Cli {
     #[arg(long = "bit_len")]
     bit_len: Option<u64>,
 
+    #[arg(long = "blocked", action = ArgAction::SetTrue)]
+    blocked: bool,
+
+    #[arg(long = "block_words", default_value_t = DEFAULT_BLOCK_WORDS)]
+    block_words: u16,
+
     #[arg(short = 't', long = "threads")]
     threads: Option<usize>,
 
@@ -61,6 +68,9 @@ fn main() -> Result<()> {
         && bit_len == 0
     {
         bail!("bit_len must be > 0 when provided");
+    }
+    if cli.blocked && (cli.block_words == 0 || !cli.block_words.is_power_of_two()) {
+        bail!("--block_words must be a non-zero power-of-two with --blocked");
     }
 
     if let Some(t) = cli.threads {
@@ -104,17 +114,27 @@ fn main() -> Result<()> {
     };
     if let Some(bit_len_override) = cli.bit_len {
         bit_len = bit_len_override.max(64);
-    } else {
-        bit_len = bit_len
-            .checked_next_power_of_two()
-            .unwrap_or(bit_len)
-            .max(64);
+    }
+    bit_len = bit_len
+        .checked_next_power_of_two()
+        .unwrap_or(bit_len)
+        .max(64);
+    if cli.blocked {
+        let min_bits = u64::from(cli.block_words) * 64;
+        if bit_len < min_bits {
+            bit_len = min_bits;
+        }
     }
 
     if cli.verbose {
         eprintln!(
-            "building filter: k={} hashes={} bits={} expected_elements={}",
-            cli.kmer_size, hash_count, bit_len, expected_elements
+            "building filter: k={} hashes={} bits={} expected_elements={} layout={} block_words={}",
+            cli.kmer_size,
+            hash_count,
+            bit_len,
+            expected_elements,
+            if cli.blocked { "blocked" } else { "classic" },
+            if cli.blocked { cli.block_words } else { 0 }
         );
     }
 
@@ -124,6 +144,8 @@ fn main() -> Result<()> {
         bit_len,
         expected_elements,
         cli.false_positive_rate,
+        cli.blocked,
+        cli.block_words,
     )?;
 
     let insert_start = Instant::now();
@@ -145,6 +167,8 @@ fn main() -> Result<()> {
     info.push_str(&format!("kmer_size\t{}\n", finalized.kmer_size));
     info.push_str(&format!("hash_count\t{}\n", finalized.hash_count));
     info.push_str(&format!("bit_len\t{}\n", finalized.bit_len));
+    info.push_str(&format!("bloom_layout\t{}\n", finalized.layout_name()));
+    info.push_str(&format!("block_words\t{}\n", finalized.block_words));
     info.push_str(&format!(
         "false_positive_rate\t{:.8}\n",
         finalized.false_positive_rate

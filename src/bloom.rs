@@ -5,7 +5,26 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAGIC: [u8; 8] = *b"BBRFILT1";
-const HEADER_SIZE: usize = 8 + 1 + 1 + 2 + 8 + 8 + 8 + 8;
+const HEADER_V1_SIZE: usize = 8 + 1 + 1 + 2 + 8 + 8 + 8 + 8;
+const HEADER_V2_SIZE: usize = HEADER_V1_SIZE + 1 + 2 + 1;
+pub const DEFAULT_BLOCK_WORDS: u16 = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum BloomLayout {
+    Classic = 0,
+    Blocked = 1,
+}
+
+impl BloomLayout {
+    fn from_u8(v: u8) -> Result<Self> {
+        match v {
+            0 => Ok(Self::Classic),
+            1 => Ok(Self::Blocked),
+            _ => bail!("unsupported bloom layout {}", v),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct BloomFilter {
@@ -14,7 +33,13 @@ pub struct BloomFilter {
     pub bit_len: u64,
     pub expected_elements: u64,
     pub false_positive_rate: f64,
+    pub layout: BloomLayout,
+    pub block_words: u16,
     bit_mask: u64,
+    block_count: u64,
+    block_count_mask: u64,
+    block_bits: u64,
+    block_bits_mask: u64,
     words: Vec<u64>,
 }
 
@@ -25,7 +50,13 @@ pub struct ConcurrentBloomFilter {
     pub bit_len: u64,
     pub expected_elements: u64,
     pub false_positive_rate: f64,
+    pub layout: BloomLayout,
+    pub block_words: u16,
     bit_mask: u64,
+    block_count: u64,
+    block_count_mask: u64,
+    block_bits: u64,
+    block_bits_mask: u64,
     words: Vec<AtomicU64>,
 }
 
@@ -36,6 +67,8 @@ impl ConcurrentBloomFilter {
         bit_len: u64,
         expected_elements: u64,
         false_positive_rate: f64,
+        blocked: bool,
+        block_words: u16,
     ) -> Result<Self> {
         if bit_len == 0 {
             bail!("bit_len must be > 0");
@@ -44,6 +77,43 @@ impl ConcurrentBloomFilter {
             bail!("hash_count must be > 0");
         }
         let word_len = bit_len.div_ceil(64) as usize;
+        let layout = if blocked {
+            BloomLayout::Blocked
+        } else {
+            BloomLayout::Classic
+        };
+        let (block_words, block_count, block_count_mask, block_bits, block_bits_mask) = match layout
+        {
+            BloomLayout::Classic => (0_u16, 0_u64, 0_u64, 0_u64, 0_u64),
+            BloomLayout::Blocked => {
+                if block_words == 0 || !block_words.is_power_of_two() {
+                    bail!("block_words must be a non-zero power-of-two");
+                }
+                if word_len < block_words as usize {
+                    bail!("bit_len is too small for blocked mode");
+                }
+                if word_len % block_words as usize != 0 {
+                    bail!("bit_len/64 must be a multiple of block_words");
+                }
+                let block_count = (word_len / block_words as usize) as u64;
+                let block_bits = u64::from(block_words) * 64;
+                (
+                    block_words,
+                    block_count,
+                    if block_count.is_power_of_two() {
+                        block_count - 1
+                    } else {
+                        0
+                    },
+                    block_bits,
+                    if block_bits.is_power_of_two() {
+                        block_bits - 1
+                    } else {
+                        0
+                    },
+                )
+            }
+        };
         let mut words = Vec::with_capacity(word_len);
         words.resize_with(word_len, || AtomicU64::new(0));
         let bit_mask = if bit_len.is_power_of_two() {
@@ -58,7 +128,13 @@ impl ConcurrentBloomFilter {
             bit_len,
             expected_elements,
             false_positive_rate,
+            layout,
+            block_words,
             bit_mask,
+            block_count,
+            block_count_mask,
+            block_bits,
+            block_bits_mask,
             words,
         })
     }
@@ -66,18 +142,40 @@ impl ConcurrentBloomFilter {
     #[inline]
     pub fn insert_kmer(&self, canonical_kmer: u64) {
         let (h1, h2) = hash_pair(canonical_kmer);
-        let mut h = h1;
-        for _ in 0..self.hash_count {
-            let idx = if self.bit_mask != 0 {
-                (h & self.bit_mask) as usize
+        if self.layout == BloomLayout::Blocked {
+            let block_idx = if self.block_count_mask != 0 {
+                (h1 & self.block_count_mask) as usize
             } else {
-                (h % self.bit_len) as usize
+                (h1 % self.block_count) as usize
             };
-            let word_idx = idx >> 6;
-            let bit = idx & 63;
-            let mask = 1_u64 << bit;
-            self.words[word_idx].fetch_or(mask, Ordering::Relaxed);
-            h = h.wrapping_add(h2);
+            let base = block_idx * self.block_words as usize;
+            let mut h = h1 ^ h2.rotate_left(17);
+            for _ in 0..self.hash_count {
+                let in_block = if self.block_bits_mask != 0 {
+                    (h & self.block_bits_mask) as usize
+                } else {
+                    (h % self.block_bits) as usize
+                };
+                let word_idx = base + (in_block >> 6);
+                let bit = in_block & 63;
+                let mask = 1_u64 << bit;
+                self.words[word_idx].fetch_or(mask, Ordering::Relaxed);
+                h = h.wrapping_add(h2);
+            }
+        } else {
+            let mut h = h1;
+            for _ in 0..self.hash_count {
+                let idx = if self.bit_mask != 0 {
+                    (h & self.bit_mask) as usize
+                } else {
+                    (h % self.bit_len) as usize
+                };
+                let word_idx = idx >> 6;
+                let bit = idx & 63;
+                let mask = 1_u64 << bit;
+                self.words[word_idx].fetch_or(mask, Ordering::Relaxed);
+                h = h.wrapping_add(h2);
+            }
         }
     }
 
@@ -94,30 +192,67 @@ impl ConcurrentBloomFilter {
             bit_len: self.bit_len,
             expected_elements: self.expected_elements,
             false_positive_rate: self.false_positive_rate,
+            layout: self.layout,
+            block_words: self.block_words,
             bit_mask: self.bit_mask,
+            block_count: self.block_count,
+            block_count_mask: self.block_count_mask,
+            block_bits: self.block_bits,
+            block_bits_mask: self.block_bits_mask,
             words,
         }
     }
 }
 
 impl BloomFilter {
+    pub fn layout_name(&self) -> &'static str {
+        match self.layout {
+            BloomLayout::Classic => "classic",
+            BloomLayout::Blocked => "blocked",
+        }
+    }
+
     #[inline]
     pub fn contains_kmer(&self, canonical_kmer: u64) -> bool {
         let (h1, h2) = hash_pair(canonical_kmer);
-        let mut h = h1;
-        for _ in 0..self.hash_count {
-            let idx = if self.bit_mask != 0 {
-                (h & self.bit_mask) as usize
+        if self.layout == BloomLayout::Blocked {
+            let block_idx = if self.block_count_mask != 0 {
+                (h1 & self.block_count_mask) as usize
             } else {
-                (h % self.bit_len) as usize
+                (h1 % self.block_count) as usize
             };
-            let word_idx = idx >> 6;
-            let bit = idx & 63;
-            let mask = 1_u64 << bit;
-            if self.words[word_idx] & mask == 0 {
-                return false;
+            let base = block_idx * self.block_words as usize;
+            let mut h = h1 ^ h2.rotate_left(17);
+            for _ in 0..self.hash_count {
+                let in_block = if self.block_bits_mask != 0 {
+                    (h & self.block_bits_mask) as usize
+                } else {
+                    (h % self.block_bits) as usize
+                };
+                let word_idx = base + (in_block >> 6);
+                let bit = in_block & 63;
+                let mask = 1_u64 << bit;
+                if self.words[word_idx] & mask == 0 {
+                    return false;
+                }
+                h = h.wrapping_add(h2);
             }
-            h = h.wrapping_add(h2);
+        } else {
+            let mut h = h1;
+            for _ in 0..self.hash_count {
+                let idx = if self.bit_mask != 0 {
+                    (h & self.bit_mask) as usize
+                } else {
+                    (h % self.bit_len) as usize
+                };
+                let word_idx = idx >> 6;
+                let bit = idx & 63;
+                let mask = 1_u64 << bit;
+                if self.words[word_idx] & mask == 0 {
+                    return false;
+                }
+                h = h.wrapping_add(h2);
+            }
         }
         true
     }
@@ -130,11 +265,14 @@ impl BloomFilter {
         w.write_all(&MAGIC)?;
         w.write_all(&[self.kmer_size])?;
         w.write_all(&[self.hash_count])?;
-        w.write_all(&(HEADER_SIZE as u16).to_le_bytes())?;
+        w.write_all(&(HEADER_V2_SIZE as u16).to_le_bytes())?;
         w.write_all(&self.bit_len.to_le_bytes())?;
         w.write_all(&self.expected_elements.to_le_bytes())?;
         w.write_all(&self.false_positive_rate.to_le_bytes())?;
         w.write_all(&(self.words.len() as u64).to_le_bytes())?;
+        w.write_all(&[self.layout as u8])?;
+        w.write_all(&self.block_words.to_le_bytes())?;
+        w.write_all(&[0_u8])?;
 
         for word in &self.words {
             w.write_all(&word.to_le_bytes())?;
@@ -166,7 +304,7 @@ impl BloomFilter {
 
         r.read_exact(&mut b2)?;
         let header_size = u16::from_le_bytes(b2) as usize;
-        if header_size < HEADER_SIZE {
+        if header_size < HEADER_V1_SIZE {
             bail!("invalid header size in {}", path.as_ref().display());
         }
 
@@ -182,10 +320,56 @@ impl BloomFilter {
         r.read_exact(&mut b8)?;
         let word_len = u64::from_le_bytes(b8) as usize;
 
-        if header_size > HEADER_SIZE {
-            let mut skip = vec![0_u8; header_size - HEADER_SIZE];
+        let mut parsed = HEADER_V1_SIZE;
+        let mut layout = BloomLayout::Classic;
+        let mut block_words = 0_u16;
+        if parsed < header_size {
+            r.read_exact(&mut b1)?;
+            layout = BloomLayout::from_u8(b1[0])?;
+            parsed += 1;
+        }
+        if parsed + 1 < header_size {
+            r.read_exact(&mut b2)?;
+            block_words = u16::from_le_bytes(b2);
+            parsed += 2;
+        }
+        if parsed < header_size {
+            let mut skip = vec![0_u8; header_size - parsed];
             r.read_exact(&mut skip)?;
         }
+
+        let (block_words, block_count, block_count_mask, block_bits, block_bits_mask) = match layout
+        {
+            BloomLayout::Classic => (0_u16, 0_u64, 0_u64, 0_u64, 0_u64),
+            BloomLayout::Blocked => {
+                if block_words == 0 || !block_words.is_power_of_two() {
+                    bail!(
+                        "invalid blocked layout header in {}",
+                        path.as_ref().display()
+                    );
+                }
+                if word_len < block_words as usize || word_len % block_words as usize != 0 {
+                    bail!("blocked layout is inconsistent with word length");
+                }
+                let block_count = (word_len / block_words as usize) as u64;
+                let block_bits = u64::from(block_words) * 64;
+                (
+                    block_words,
+                    block_count,
+                    if block_count.is_power_of_two() {
+                        block_count - 1
+                    } else {
+                        0
+                    },
+                    block_bits,
+                    if block_bits.is_power_of_two() {
+                        block_bits - 1
+                    } else {
+                        0
+                    },
+                )
+            }
+        };
 
         let mut words = Vec::with_capacity(word_len);
         for _ in 0..word_len {
@@ -199,11 +383,17 @@ impl BloomFilter {
             bit_len,
             expected_elements,
             false_positive_rate,
+            layout,
+            block_words,
             bit_mask: if bit_len.is_power_of_two() {
                 bit_len - 1
             } else {
                 0
             },
+            block_count,
+            block_count_mask,
+            block_bits,
+            block_bits_mask,
             words,
         })
     }
@@ -338,7 +528,7 @@ mod tests {
 
     #[test]
     fn bloom_roundtrip() {
-        let bf = ConcurrentBloomFilter::new(21, 4, 10_000, 1000, 0.01)
+        let bf = ConcurrentBloomFilter::new(21, 4, 10_000, 1000, 0.01, false, 0)
             .expect("concurrent bf init should succeed");
         bf.insert_kmer(123);
         bf.insert_kmer(456);
@@ -356,5 +546,30 @@ mod tests {
         assert!(loaded.contains_kmer(456));
         assert_eq!(loaded.kmer_size, 21);
         assert_eq!(loaded.hash_count, 4);
+        assert_eq!(loaded.layout, BloomLayout::Classic);
+    }
+
+    #[test]
+    fn blocked_bloom_roundtrip() {
+        let bf = ConcurrentBloomFilter::new(21, 4, 32_768, 1000, 0.01, true, 8)
+            .expect("blocked bf init should succeed");
+        bf.insert_kmer(123);
+        bf.insert_kmer(456);
+
+        let bf = bf.finalize();
+        assert!(bf.contains_kmer(123));
+        assert!(bf.contains_kmer(456));
+        assert_eq!(bf.layout, BloomLayout::Blocked);
+        assert_eq!(bf.block_words, 8);
+
+        let d = tempdir().expect("tempdir should be creatable");
+        let p = d.path().join("t_blocked.bf");
+        bf.save(&p).expect("save should succeed");
+
+        let loaded = BloomFilter::load(&p).expect("load should succeed");
+        assert!(loaded.contains_kmer(123));
+        assert!(loaded.contains_kmer(456));
+        assert_eq!(loaded.layout, BloomLayout::Blocked);
+        assert_eq!(loaded.block_words, 8);
     }
 }
