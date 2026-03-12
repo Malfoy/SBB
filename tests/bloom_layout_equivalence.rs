@@ -8,10 +8,11 @@ fn classic_and_blocked_have_no_false_negatives_on_inserted_set() {
     let mut inserted = Vec::with_capacity(20_000);
 
     let classic =
-        ConcurrentBloomFilter::new(kmer_size, hash_count, bit_len, 20_000, 0.01, false, 0)
+        ConcurrentBloomFilter::new(kmer_size, hash_count, bit_len, 20_000, 0.01, 1.0, false, 0)
             .expect("classic init should succeed");
-    let blocked = ConcurrentBloomFilter::new(kmer_size, hash_count, bit_len, 20_000, 0.01, true, 8)
-        .expect("blocked init should succeed");
+    let blocked =
+        ConcurrentBloomFilter::new(kmer_size, hash_count, bit_len, 20_000, 0.01, 1.0, true, 8)
+            .expect("blocked init should succeed");
 
     for i in 0_u64..20_000 {
         let key = i.wrapping_mul(0x9E3779B97F4A7C15).rotate_left(17);

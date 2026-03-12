@@ -60,6 +60,9 @@ struct MakerArgs {
     #[arg(short = 'n', long = "num_ele", default_value_t = 0)]
     num_ele: u64,
 
+    #[arg(long = "sample_alpha", default_value_t = 1.0)]
+    sample_alpha: f64,
+
     #[arg(long = "bit_len")]
     bit_len: Option<u64>,
 
@@ -68,6 +71,9 @@ struct MakerArgs {
 
     #[arg(long = "classic", action = ArgAction::SetTrue)]
     classic: bool,
+
+    #[arg(long = "bloomybloom", action = ArgAction::SetTrue)]
+    bloomybloom: bool,
 
     #[arg(long = "block_words", default_value_t = DEFAULT_BLOCK_WORDS)]
     block_words: u16,
@@ -182,6 +188,23 @@ struct QueryMetrics {
     query_nanos: u128,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MakerLayout {
+    Classic,
+    Blocked,
+    BloomyBloom,
+}
+
+impl MakerLayout {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Blocked => "blocked",
+            Self::BloomyBloom => "bloomybloom",
+        }
+    }
+}
+
 impl Stats {
     fn new(filter_count: usize) -> Self {
         Self {
@@ -225,25 +248,56 @@ fn configure_threads(threads: Option<usize>) -> Result<()> {
     Ok(())
 }
 
-fn run_maker(cli: MakerArgs) -> Result<()> {
-    if !(1..=32).contains(&cli.kmer_size) {
-        bail!("k-mer size must be in [1, 32]");
+fn scaled_expected_elements(expected_elements: u64, sample_alpha: f64) -> u64 {
+    if sample_alpha <= 0.0 {
+        0
+    } else if sample_alpha >= 1.0 {
+        expected_elements.max(1)
+    } else {
+        ((expected_elements.max(1) as f64) * sample_alpha).ceil() as u64
     }
+}
+
+fn run_maker(cli: MakerArgs) -> Result<()> {
     if !(0.0..1.0).contains(&cli.false_positive_rate) {
         bail!("false positive rate must be in (0, 1)");
+    }
+    if !(0.0..=1.0).contains(&cli.sample_alpha) {
+        bail!("--sample_alpha must be in [0, 1]");
     }
     if let Some(bit_len) = cli.bit_len
         && bit_len == 0
     {
         bail!("bit_len must be > 0 when provided");
     }
-    if cli.blocked && cli.classic {
-        bail!("choose only one layout override: --blocked or --classic");
+    let layout_override_count =
+        usize::from(cli.blocked) + usize::from(cli.classic) + usize::from(cli.bloomybloom);
+    if layout_override_count > 1 {
+        bail!("choose only one layout override: --blocked, --classic, or --bloomybloom");
     }
 
-    let blocked_layout = !cli.classic;
-    if blocked_layout && (cli.block_words == 0 || !cli.block_words.is_power_of_two()) {
+    let layout = if cli.classic {
+        MakerLayout::Classic
+    } else if cli.bloomybloom {
+        MakerLayout::BloomyBloom
+    } else {
+        MakerLayout::Blocked
+    };
+
+    let max_k = if layout == MakerLayout::BloomyBloom {
+        u8::MAX as usize
+    } else {
+        32
+    };
+    if !(1..=max_k).contains(&cli.kmer_size) {
+        bail!("k-mer size must be in [1, {max_k}]");
+    }
+
+    if layout == MakerLayout::Blocked && (cli.block_words == 0 || !cli.block_words.is_power_of_two()) {
         bail!("--block_words must be a non-zero power-of-two in blocked mode");
+    }
+    if layout == MakerLayout::BloomyBloom && cli.sample_alpha < 1.0 {
+        bail!("--sample_alpha < 1.0 is not supported with --bloomybloom");
     }
     if let Some(threshold) = cli.progressive {
         if !(0.0..=1.0).contains(&threshold) {
@@ -259,13 +313,16 @@ fn run_maker(cli: MakerArgs) -> Result<()> {
     if cli.iterations == 0 {
         bail!("--iterations must be > 0");
     }
+    if layout == MakerLayout::BloomyBloom && cli.progressive.is_some() && cli.subtract.is_some() {
+        bail!("--subtract is not supported with --bloomybloom in progressive mode");
+    }
 
     configure_threads(cli.threads)?;
 
     fs::create_dir_all(&cli.output_dir)
         .with_context(|| format!("failed to create {}", cli.output_dir.display()))?;
 
-    let expected_elements = if cli.num_ele > 0 {
+    let expected_elements_raw = if cli.num_ele > 0 {
         cli.num_ele
     } else {
         if cli.verbose {
@@ -277,6 +334,7 @@ fn run_maker(cli: MakerArgs) -> Result<()> {
             .try_reduce(|| 0_u64, |a, b| Ok(a + b))?
             .max(1)
     };
+    let expected_elements = scaled_expected_elements(expected_elements_raw, cli.sample_alpha);
 
     let base_bit_len = optimal_bit_len(expected_elements, cli.false_positive_rate).max(64);
     let (hash_count, mut bit_len) = if let Some(k) = cli.hash_num {
@@ -299,34 +357,51 @@ fn run_maker(cli: MakerArgs) -> Result<()> {
         .checked_next_power_of_two()
         .unwrap_or(bit_len)
         .max(64);
-    if blocked_layout {
+    if layout == MakerLayout::Blocked {
         let min_bits = u64::from(cli.block_words) * 64;
         if bit_len < min_bits {
             bit_len = min_bits;
         }
     }
 
-    if cli.verbose {
-        eprintln!(
-            "building filter: k={} hashes={} bits={} expected_elements={} layout={} block_words={}",
-            cli.kmer_size,
+    let filter = if layout == MakerLayout::BloomyBloom {
+        ConcurrentBloomFilter::new_bloomybloom(
+            cli.kmer_size as u8,
+            bit_len,
+            expected_elements,
+            cli.false_positive_rate,
+            cli.sample_alpha,
+            cli.hash_num,
+        )?
+    } else {
+        ConcurrentBloomFilter::new(
+            cli.kmer_size as u8,
             hash_count,
             bit_len,
             expected_elements,
-            if blocked_layout { "blocked" } else { "classic" },
-            if blocked_layout { cli.block_words } else { 0 }
+            cli.false_positive_rate,
+            cli.sample_alpha,
+            layout == MakerLayout::Blocked,
+            cli.block_words,
+        )?
+    };
+
+    if cli.verbose {
+        eprintln!(
+            "building filter: k={} hashes={} bits={} expected_elements={} sample_alpha={:.6} layout={} block_words={}",
+            cli.kmer_size,
+            filter.hash_count,
+            filter.bit_len,
+            expected_elements,
+            cli.sample_alpha,
+            layout.as_str(),
+            if layout == MakerLayout::Blocked {
+                cli.block_words
+            } else {
+                0
+            }
         );
     }
-
-    let filter = ConcurrentBloomFilter::new(
-        cli.kmer_size as u8,
-        hash_count,
-        bit_len,
-        expected_elements,
-        cli.false_positive_rate,
-        blocked_layout,
-        cli.block_words,
-    )?;
 
     let insert_start = Instant::now();
     let mut inserted = 0_u64;
@@ -398,62 +473,18 @@ fn run_maker(cli: MakerArgs) -> Result<()> {
 
     let finalized = filter.finalize();
 
-    let bf_path = cli.output_dir.join(format!("{}.bf", cli.file_prefix));
+    let bf_path = cli.output_dir.join(format!("{}.bf.zst", cli.file_prefix));
     finalized.save(&bf_path)?;
 
-    let info_path = cli.output_dir.join(format!("{}.txt", cli.file_prefix));
-    let mut info = String::new();
-    info.push_str(&format!("filter_id\t{}\n", cli.file_prefix));
-    info.push_str(&format!("kmer_size\t{}\n", finalized.kmer_size));
-    info.push_str(&format!("hash_count\t{}\n", finalized.hash_count));
-    info.push_str(&format!("bit_len\t{}\n", finalized.bit_len));
-    info.push_str(&format!("bloom_layout\t{}\n", finalized.layout_name()));
-    info.push_str(&format!("block_words\t{}\n", finalized.block_words));
-    info.push_str(&format!(
-        "false_positive_rate\t{:.8}\n",
-        finalized.false_positive_rate
-    ));
-    info.push_str(&format!(
-        "expected_elements\t{}\n",
-        finalized.expected_elements
-    ));
-    if let Some(threshold) = cli.progressive {
-        info.push_str(&format!("progressive_threshold\t{:.6}\n", threshold));
-        info.push_str(&format!("progressive_seed_files\t{}\n", cli.seed_files));
-        info.push_str(&format!("progressive_passes\t{}\n", progressive_passes));
-        info.push_str(&format!(
-            "progressive_total_reads\t{}\n",
-            progressive_total_reads
-        ));
-        info.push_str(&format!(
-            "progressive_matched_reads\t{}\n",
-            progressive_matched_reads
-        ));
-        info.push_str(&format!(
-            "progressive_queried_kmers\t{}\n",
-            progressive_queried_kmers
-        ));
-        if let Some(path) = cli.subtract.as_ref() {
-            info.push_str(&format!("progressive_subtract\t{}\n", path.display()));
-        }
-    }
-    info.push_str(&format!("inserted_kmers\t{}\n", inserted));
-    info.push_str("inputs\t");
-    for (i, p) in cli.files.iter().enumerate() {
-        if i > 0 {
-            info.push(';');
-        }
-        info.push_str(&p.display().to_string());
-    }
-    info.push('\n');
-    fs::write(&info_path, info)
-        .with_context(|| format!("failed to write {}", info_path.display()))?;
-
     println!("wrote filter: {}", bf_path.display());
-    println!("wrote info:   {}", info_path.display());
     println!(
-        "k={} hashes={} bits={} inserted_kmers={}",
-        finalized.kmer_size, finalized.hash_count, finalized.bit_len, inserted
+        "k={} hashes={} bits={} sample_alpha={:.6} layout={} inserted_kmers={}",
+        finalized.kmer_size,
+        finalized.hash_count,
+        finalized.bit_len,
+        finalized.sample_rate,
+        finalized.layout_name(),
+        inserted
     );
     if let Some(threshold) = cli.progressive {
         println!("progressive_threshold\t{:.6}", threshold);
@@ -462,6 +493,9 @@ fn run_maker(cli: MakerArgs) -> Result<()> {
         println!("progressive_total_reads\t{}", progressive_total_reads);
         println!("progressive_matched_reads\t{}", progressive_matched_reads);
         println!("progressive_queried_kmers\t{}", progressive_queried_kmers);
+        if let Some(path) = cli.subtract.as_ref() {
+            println!("progressive_subtract\t{}", path.display());
+        }
     }
     println!("insert_kmer_ops\t{}", inserted);
     if inserted > 0 {

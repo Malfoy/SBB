@@ -1,0 +1,10 @@
+/target
+bencher.py
+/temps/*
+/gerbil/build
+/results
+bench_results.csv
+*.csv
+__pycache__/
+*.pyc
+/benchmarks/results/*

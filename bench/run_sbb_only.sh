@@ -63,7 +63,7 @@ fi
   >/tmp/sbb_maker_${TAG}.log 2>/tmp/sbb_maker_${TAG}.err
 
 /usr/bin/time -f "sbb\tcategorizer\t%e\t%M" -o "$SUMMARY" -a \
-  "$SBB_BIN" categorizer -f "$RS_DIR/rs_ref.bf" -t "$THREADS" -s "$CAT_SCORE" "$READS_INPUT" \
+  "$SBB_BIN" categorizer -f "$RS_DIR/rs_ref.bf.zst" -t "$THREADS" -s "$CAT_SCORE" "$READS_INPUT" \
   >/tmp/sbb_cat_${TAG}.log 2>/tmp/sbb_cat_${TAG}.err
 
 echo "threads\t$THREADS"

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/bench/common.sh"
+bench_init_cpp_env
+
 BENCH_ROOT="${BENCH_ROOT:-/tmp/sbb-bench-big}"
 DATA_DIR="$BENCH_ROOT/data"
 CPP_DIR="$BENCH_ROOT/cpp"
@@ -15,12 +19,8 @@ CAT_SCORE="${CAT_SCORE:-1.0}"
 RS_BLOOM_IMPL="${RS_BLOOM_IMPL:-blocked}"
 RS_BLOCK_WORDS="${RS_BLOCK_WORDS:-8}"
 
-CPP_MAKER="${CPP_MAKER:-/tmp/biobloom-upstream/BioBloomMaker/biobloommaker}"
-CPP_CAT="${CPP_CAT:-/tmp/biobloom-upstream/BioBloomCategorizer/biobloomcategorizer}"
-SBB_BIN="${SBB_BIN:-/home/nadine/Code/SBB/target/release/sbb}"
-BENCHGEN="${BENCHGEN:-/home/nadine/Code/SBB/target/release/sbbbenchgen}"
-
-export LD_LIBRARY_PATH="/tmp/biobloom-conda/lib:${LD_LIBRARY_PATH:-}"
+SBB_BIN="${SBB_BIN:-$ROOT_DIR/target/release/sbb}"
+BENCHGEN="${BENCHGEN:-$ROOT_DIR/target/release/sbbbenchgen}"
 
 mkdir -p "$DATA_DIR" "$CPP_DIR" "$RS_DIR"
 
@@ -75,7 +75,7 @@ fi
   >/tmp/sbb_rs_maker.log 2>/tmp/sbb_rs_maker.err
 
 /usr/bin/time -f "sbb\tcategorizer\t%e\t%M" -o "$SUMMARY" -a \
-  "$SBB_BIN" categorizer -f "$RS_DIR/rs_ref.bf" -t "$THREADS" -s "$CAT_SCORE" "$READS_INPUT" \
+  "$SBB_BIN" categorizer -f "$RS_DIR/rs_ref.bf.zst" -t "$THREADS" -s "$CAT_SCORE" "$READS_INPUT" \
   >/tmp/sbb_rs_cat.log 2>/tmp/sbb_rs_cat.err
 
 echo "threads\t$THREADS"

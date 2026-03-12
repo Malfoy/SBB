@@ -1,4 +1,4 @@
-use crate::bloom::{BloomFilter, for_each_canonical_kmer, for_each_canonical_kmer_until};
+use crate::bloom::BloomFilter;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
@@ -54,9 +54,13 @@ impl FilterDb {
 }
 
 pub fn filter_id_from_path(path: &Path) -> String {
-    path.file_stem()
+    let file_name = path
+        .file_name()
         .and_then(|x| x.to_str())
-        .unwrap_or("filter")
+        .unwrap_or("filter");
+    file_name
+        .strip_suffix(".bf.zst")
+        .unwrap_or(file_name)
         .to_string()
 }
 
@@ -120,16 +124,7 @@ pub fn score_seq_against_filter(seq: &[u8], bloom: &BloomFilter) -> f64 {
 }
 
 pub fn score_seq_against_filter_with_counts(seq: &[u8], bloom: &BloomFilter) -> (f64, u64) {
-    let mut total = 0_u64;
-    let mut hits = 0_u64;
-    let k = bloom.kmer_size as usize;
-
-    for_each_canonical_kmer(seq, k, |canonical| {
-        total += 1;
-        if bloom.contains_kmer(canonical) {
-            hits += 1;
-        }
-    });
+    let (hits, total) = bloom.score_sequence_with_counts(seq);
 
     if total == 0 {
         (0.0, 0)
@@ -143,61 +138,7 @@ pub fn match_seq_against_filter_with_counts(
     bloom: &BloomFilter,
     cfg: ClassifyConfig,
 ) -> (bool, u64) {
-    let k = bloom.kmer_size as usize;
-    if seq.len() < k {
-        return (
-            if cfg.best_hit {
-                false
-            } else {
-                0.0 >= cfg.threshold
-            },
-            0,
-        );
-    }
-
-    if cfg.best_hit {
-        let mut queried = 0_u64;
-        let mut matched = false;
-        for_each_canonical_kmer_until(seq, k, |canonical| {
-            queried += 1;
-            if bloom.contains_kmer(canonical) {
-                matched = true;
-                false
-            } else {
-                true
-            }
-        });
-        return (matched, queried);
-    }
-
-    let max_total = (seq.len() - k + 1) as u64;
-    let needed_hits = (cfg.threshold * max_total as f64).ceil() as u64;
-    if needed_hits == 0 {
-        return (true, 0);
-    }
-
-    let mut queried = 0_u64;
-    let mut hits = 0_u64;
-    let mut matched = false;
-    for_each_canonical_kmer_until(seq, k, |canonical| {
-        queried += 1;
-        if bloom.contains_kmer(canonical) {
-            hits += 1;
-            if hits >= needed_hits {
-                matched = true;
-                return false;
-            }
-        }
-        true
-    });
-
-    if matched {
-        (true, queried)
-    } else if queried == 0 {
-        (0.0 >= cfg.threshold, 0)
-    } else {
-        ((hits as f64 / queried as f64) >= cfg.threshold, queried)
-    }
+    bloom.match_sequence_threshold_with_counts(seq, cfg.threshold, cfg.best_hit)
 }
 
 pub fn apply_inclusive_pair(

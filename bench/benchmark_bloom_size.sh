@@ -106,7 +106,7 @@ run_case() {
 
   /usr/bin/time -f "%e\t%M" -o "$cat_time" \
     "$SBB_BIN" categorizer \
-      -f "$out_dir/ref_${run_tag}.bf" \
+      -f "$out_dir/ref_${run_tag}.bf.zst" \
       -t "$THREADS" \
       -s "$CAT_SCORE" \
       "$READS_INPUT" \
